@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Slot Game with PixiJS</title>
+    <script src="https://pixijs.download/v5.3.10/pixi.min.js"></script>
+    <script src="https://pixijs.download/v5.3.10/extras/Tween.js"></script>
+</head>
+
+<body>
+
+    <script>
+        const app = new PIXI.Application({ width: 800, height: 600, background: '#1099bb' });
+        document.body.appendChild(app.view);
+
+        const SYMBOL_SIZE = 100;
+        const style = new PIXI.TextStyle({
+            fontFamily: 'Arial',
+            fontSize: 36,
+            fill: 0xFFFFFF,
+        });
+        const buttonStyle = new PIXI.TextStyle({
+                fill: 0xFFFF00,
+                fontSize: 36,
+        });
+        const tweening = [];
+        let balance = 100;
+        let betAmount = 5;
+        let totalWin = 0;
+        let running = false;
+        
+        
+
+        PIXI.Loader.shared
+            .add('cherry', 'assets/img/cherry.png')
+            .add('lemon', 'assets/img/lemon.png')
+            .add('orange', 'assets/img/orange.png')
+            .load(onAssetsLoaded);
+            
+
+        function onAssetsLoaded(loader, resources) {
+            const slotTextures = [
+                resources.cherry.texture,
+                resources.lemon.texture,
+                resources.orange.texture,
+            ];
+
+            const REEL_WIDTH = SYMBOL_SIZE;
+            const reels = [];
+            const reelContainer = new PIXI.Container();
+            const margin = (app.screen.height - SYMBOL_SIZE * 3) / 2;
+
+
+            reelContainer.x = Math.round((app.screen.width - REEL_WIDTH * 3) / 2);
+
+            for (let i = 0; i < 3; i++) {
+                const rc = new PIXI.Container();
+                rc.x = i * REEL_WIDTH;
+                reelContainer.addChild(rc);
+
+                const reel = {
+                    container: rc,
+                    symbols: [],
+                    position: 0,
+                    previousPosition: 0,
+                    blur: new PIXI.filters.BlurFilter(),
+                };
+
+                reel.blur.blurX = 0;
+                reel.blur.blurY = 0;
+                rc.filters = [reel.blur];
+
+                for (let j = 0; j < 4; j++) {
+                    const symbol = new PIXI.Sprite(slotTextures[Math.floor(Math.random() * slotTextures.length)]);
+                    symbol.x = Math.round((REEL_WIDTH - SYMBOL_SIZE) / 2);
+                    symbol.y = j * SYMBOL_SIZE;
+                    symbol.scale.x = symbol.scale.y = Math.min(SYMBOL_SIZE / symbol.width, SYMBOL_SIZE / symbol.height);
+                    reel.symbols.push(symbol);
+                    rc.addChild(symbol);
+                }
+                reels.push(reel);
+            }
+
+            reelContainer.y = margin;
+            const top = new PIXI.Graphics();
+            top.beginFill(0, 1);
+            top.drawRect(0, 0, app.screen.width, margin);
+            const bottom = new PIXI.Graphics();
+            bottom.beginFill(0, 1);
+            bottom.drawRect(0, SYMBOL_SIZE * 3 + margin, app.screen.width, margin);
+
+            const playText = new PIXI.Text('Spin', buttonStyle);
+            playText.x = Math.round((app.screen.width - playText.width) / 2);
+            playText.y = app.screen.height - margin + Math.round((margin - playText.height) / 3);
+            bottom.addChild(playText);
+
+            const headerText = new PIXI.Text('Fruity Slots', style);
+            headerText.x = Math.round((top.width - headerText.width) / 3);
+            headerText.y = Math.round((margin - headerText.height) / 3);
+            top.addChild(headerText);
+
+            app.stage.addChild(reelContainer, top, bottom);
+
+            // bet panel
+            const betPanel = new PIXI.Container();
+            betPanel.x = app.screen.width / 2 - 100;
+            betPanel.y = app.screen.height - margin + 90; 
+            app.stage.addChild(betPanel);
+
+            const betText = new PIXI.Text('Bet:', style);
+            betText.x = -10;
+            betText.y = 10;
+            betPanel.addChild(betText);
+
+            const betValue = new PIXI.Text('0', style);
+            betValue.x = 70;
+            betValue.y = 10;
+            betPanel.addChild(betValue);
+
+            const increaseBetButton = createButton('+', 120, 10, () => {
+                const currentBet = parseInt(betValue.text);
+                betValue.text = (currentBet + 5).toString();
+
+                if (balance >= currentBet + 5) {
+                    betAmount = currentBet + 5;
+                    updateBalanceText();
+                } else {
+                    betValue.text = currentBet.toString();
+                }
+            });
+
+            betPanel.addChild(increaseBetButton);
+
+            const decreaseBetButton = createButton('-', 150, 10, () => {
+                const currentBet = parseInt(betValue.text);
+
+                if (currentBet >= 10) {
+                    betValue.text = (currentBet - 5).toString();
+                    betAmount = currentBet - 5;
+                    updateBalanceText();
+                }
+            });
+
+            betPanel.addChild(decreaseBetButton);
+
+            const balanceText = new PIXI.Text('Balance: $' + balance.toFixed(2), style);
+            balanceText.x = app.screen.width - 300;
+            balanceText.y = 20;
+            app.stage.addChild(balanceText);
+
+            // win display
+            const winText = new PIXI.Text('', style);
+            winText.x = app.screen.width - 200;
+            winText.y = 70; 
+            app.stage.addChild(winText);
+
+            bottom.interactive = true;
+            bottom.cursor = 'pointer';
+            bottom.on('pointerdown', Spin);
+
+
+            function disableSpinButton() {
+                bottom.interactive = false;
+                playText.style = new PIXI.TextStyle({ fill: 0x808080, fontSize: 36 });
+            }
+
+            function enableSpinButton() {
+                bottom.interactive = true;
+                playText.style = new PIXI.TextStyle({ fill: 0xFFFF00, fontSize: 36 });
+            }
+
+
+            function updateBalanceText() {
+                balanceText.text = 'Balance: $' + balance.toFixed(2);
+            }
+
+            function Spin() {
+                if (running || balance < betAmount || betAmount === 0) return;
+                running = true;
+
+                disableSpinButton();
+            
+                balance -= betAmount;
+                updateBalanceText();
+
+                betValue.text = '0';
+
+                for (let i = 0; i < reels.length; i++) {
+                    const r = reels[i];
+                    const extra = Math.floor(Math.random() * 3);
+                    const target = r.position + 10 + i * 5 + extra;
+                    const time = 2500 + i * 600 + extra * 600;
+
+                    tweenTo(r, 'position', target, time, backout(0.5), null, i === reels.length - 1 ? reelsComplete : null);
+                }
+            }
+
+
+            function calculateWin() {
+                for (let i = 0; i < reels[0].symbols.length; i++) {
+                    const symbol0 = reels[0].symbols[i].texture.baseTexture.resource.url;
+                    const symbol1 = reels[1].symbols[i].texture.baseTexture.resource.url;
+                    const symbol2 = reels[2].symbols[i].texture.baseTexture.resource.url;
+
+                    if (symbol0 === symbol1 && symbol1 === symbol2 && symbol0 === symbol2) {
+                        console.log(1234);
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+
+
+            function reelsComplete() {
+                running = false;
+                enableSpinButton();
+                playText.text = 'Spin';
+
+                const win = calculateWin();
+
+                if (win) {
+                    const winAmount = betAmount * 2; 
+
+                    totalWin += winAmount;
+                    balance += winAmount;
+                    updateBalanceText();
+
+                    winText.text = 'YOU WIN! ' + betAmount;
+                    winText.style.fill = 0xFFFF00; 
+                    winText.x = app.screen.width - winText.width - 20; 
+
+                    
+                    setTimeout(() => {
+                        winText.text = '';
+                        winText.style.fill = 0xFFFFFF; 
+                    }, 3000);
+                } else {
+                    winText.text = '';
+                    winText.style.fill = 0xFFFFFF; 
+                }
+            }
+
+
+            app.ticker.add((delta) => {
+                for (let i = 0; i < reels.length; i++) {
+                    const r = reels[i];
+                    r.blur.blurY = (r.position - r.previousPosition) * 8;
+                    r.previousPosition = r.position;
+
+                    for (let j = 0; j < r.symbols.length; j++) {
+                        const s = r.symbols[j];
+                        const prevy = s.y;
+
+                        s.y = ((r.position + j) % r.symbols.length) * SYMBOL_SIZE - SYMBOL_SIZE;
+                        if (s.y < 0 && prevy > SYMBOL_SIZE) {
+                            s.texture = slotTextures[Math.floor(Math.random() * slotTextures.length)];
+                            s.scale.x = s.scale.y = Math.min(SYMBOL_SIZE / s.texture.width, SYMBOL_SIZE / s.texture.height);
+                            s.x = Math.round((SYMBOL_SIZE - s.width) / 2);
+                        }
+                    }
+                }
+            });
+
+            
+
+            function tweenTo(object, property, target, time, easing, onchange, oncomplete) {
+                const tween = {
+                    object,
+                    property,
+                    propertyBeginValue: object[property],
+                    target,
+                    easing,
+                    time,
+                    change: onchange,
+                    complete: oncomplete,
+                    start: Date.now(),
+                };
+
+                tweening.push(tween);
+
+                return tween;
+            }
+
+            app.ticker.add((delta) => {
+                const now = Date.now();
+                const remove = [];
+
+                for (let i = 0; i < tweening.length; i++) {
+                    const t = tweening[i];
+                    const phase = Math.min(1, (now - t.start) / t.time);
+
+                    t.object[t.property] = lerp(t.propertyBeginValue, t.target, t.easing(phase));
+                    if (t.change) t.change(t);
+                    if (phase === 1) {
+                        t.object[t.property] = t.target;
+                        if (t.complete) t.complete(t);
+                        remove.push(t);
+                    }
+                }
+                for (let i = 0; i < remove.length; i++) {
+                    tweening.splice(tweening.indexOf(remove[i]), 1);
+                }
+            });
+
+            function lerp(a1, a2, t) {
+                return a1 * (1 - t) + a2 * t;
+            }
+
+            function backout(amount) {
+                return (t) => (--t * t * ((amount + 1) * t + amount) + 1);
+            }
+
+            function createButton(text, x, y, onClick) {
+                const button = new PIXI.Text(text, style);
+                button.x = x;
+                button.y = y;
+                button.interactive = true;
+                button.buttonMode = true;
+
+
+
+                button.on('pointerdown', () => {
+                    if (button.interactive) {
+                        onClick();
+                    }
+                });
+
+                return button;
+            }
+
+        }
+    </script>
+</body>
+
+</html>
